@@ -18,7 +18,7 @@ package ca.uwaterloo.flix.language.phase.unification.set
 
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.language.ast.SourceLocation
-import ca.uwaterloo.flix.language.phase.unification.set.SetFormula.{Cst, Empty, Union, Var}
+import ca.uwaterloo.flix.language.phase.unification.set.SetFormula.{Cst, Empty, Semi, Union, Var}
 import ca.uwaterloo.flix.util.collection.TwoList
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -51,7 +51,7 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(19), Var(18)),
       mkEq(Var(19), Var(11))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
@@ -88,7 +88,7 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(15), Cst(25)),
       mkEq(Var(16), Cst(26))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
@@ -117,7 +117,7 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(8), Cst(20)),
       mkEq(Var(9), Cst(21))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
@@ -157,7 +157,7 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(17), Cst(29)),
       mkEq(Var(16), Cst(29))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
@@ -205,7 +205,7 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(18), Union(TwoList(Var(17), Var(34), List()))),
       mkEq(Var(20), Cst(36))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
@@ -249,7 +249,7 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(19), Var(17)),
       mkEq(Var(34), Var(20))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
@@ -273,7 +273,15 @@ class TestSetUnification extends AnyFunSuite with TestUtils {
       mkEq(Var(16), Union(TwoList(Var(2), Var(10), List()))),
       mkEq(Var(17), Var(6))
     )
-    val (eqs, _) = SetUnification.solve(input)
+    val (eqs, _, _) = SetUnification.solve(input)
+    assert(eqs.isEmpty)
+  }
+
+  test("Semi.Simple") {
+    val input = List(
+      mkEq(Semi(0,1), Semi(0,1))
+    )
+    val (eqs, _, _) = SetUnification.solve(input)
     assert(eqs.isEmpty)
   }
 
