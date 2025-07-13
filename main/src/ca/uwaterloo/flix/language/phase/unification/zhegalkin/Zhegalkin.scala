@@ -49,6 +49,7 @@ object Zhegalkin {
       polys.reduce[ZhegalkinExpr[CofiniteIntSet]] {
         case (x, y) =>  ZhegalkinExpr.mkXor(x, y)(alg, lat)
       }
+    case _ => ???
   }
 
   /** Returns the given Zhegalkin expression as a SetFormula. */

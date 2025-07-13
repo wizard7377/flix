@@ -146,7 +146,7 @@ sealed trait SetFormula {
     case Var(x) => s"x$x"
     case Semi(head, args) => s"s$head[$args]"
     case Compl(f) => f match {
-      case Univ | Empty | Cst(_) | ElemSet(_) | Var(_) | Compl(_) => s"!$f"
+      case Univ | Empty | Cst(_) | ElemSet(_) | Var(_) | Compl(_) | Semi(_, _) => s"!$f"
       case Inter(_) | Union(_) | Xor(_) => s"!($f)"
     }
     case Inter(l) =>
