@@ -65,6 +65,8 @@ case class SetSubstitution(m: IntMap[SetFormula]) {
       case SetFormula.Union(l) => SetFormula.Union(l.map(visit))
 
       case SetFormula.Xor(l) => SetFormula.mkXorAll(l.map(visit))
+
+      case SetFormula.Semi(_, x) => m.getOrElse(x, f0)
     }
 
     if (m.isEmpty) {

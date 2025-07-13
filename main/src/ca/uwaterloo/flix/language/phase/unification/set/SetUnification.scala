@@ -21,6 +21,7 @@ import ca.uwaterloo.flix.language.phase.unification.set.SetFormula.*
 import ca.uwaterloo.flix.language.phase.unification.shared.{BoolUnificationException, CofiniteIntSet, SveAlgorithm}
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.{Zhegalkin, ZhegalkinAlgebra}
 import ca.uwaterloo.flix.util.Result
+import ca.uwaterloo.flix.util.collection.Bimap
 
 import scala.collection.immutable.IntMap
 import scala.collection.mutable
@@ -78,6 +79,8 @@ object SetUnification {
     var eqs: List[Equation] = initialEquations
     /** The current substitution, which has already been applied to `eqs`. */
     var subst: SetSubstitution = SetSubstitution.empty
+    /** The current semi-variable substitution, which has already been applied to `eqs`. */
+    var semis: Bimap[Int,Int] = Bimap.empty
   }
 
   /**
@@ -93,7 +96,7 @@ object SetUnification {
     * [[Equation.Status.Timeout]]. The returned equations might not exist in `eqs` directly, but
     * will be derived from it.
     */
-  def solve(l: List[Equation]): (List[Equation], SetSubstitution) = {
+  def solve(l: List[Equation]): (List[Equation], SetSubstitution, Bimap[Int,Int]) = {
     val state = new State(l)
 
     if (EnableRewriteRules) {
@@ -120,20 +123,20 @@ object SetUnification {
         state.subst = SetSubstitution.empty
     }
 
-    (state.eqs, state.subst)
+    (state.eqs, state.subst, state.semis)
   }
 
   /**
     * Runs the given equation system solver `phase` on `state`.
     */
-  private def runWithState(state: State, f: List[Equation] => Option[(List[Equation], SetSubstitution)], phase: Phase): Unit = {
+  private def runWithState(state: State, f: List[Equation] => Option[(List[Equation], SetSubstitution, Bimap[Int,Int])], phase: Phase): Unit = {
     var numberOfVars: Int = 0
     if (EnableStats) {
       numberOfVars = state.eqs.map(_.varsOf.size).sum
     }
 
     f(state.eqs) match {
-      case Some((eqs, subst)) =>
+      case Some((eqs, subst, semis)) =>
 
         if (EnableStats) {
           synchronized {
@@ -167,7 +170,7 @@ object SetUnification {
     *
     * Always succeeds.
     */
-  private def reflexiveAndDuplicate(eqs: List[Equation]): Option[(List[Equation], SetSubstitution)] = {
+  private def reflexiveAndDuplicate(eqs: List[Equation]): Option[(List[Equation], SetSubstitution, Bimap[Int,Int])] = {
     var result: List[Equation] = Nil
     val seen = mutable.Set.empty[Equation]
     var changed = false
@@ -183,11 +186,11 @@ object SetUnification {
       }
     }
 
-    if (changed) Some((result.reverse, SetSubstitution.empty)) else None
+    if (changed) Some((result.reverse, SetSubstitution.empty, Bimap.empty)) else None
   }
 
   /** Run a unification rule on an equation system in a fixpoint. */
-  private def runRule(rule: Equation => Option[(List[Equation], SetSubstitution)])(eqs: List[Equation]): Option[(List[Equation], SetSubstitution)] = {
+  private def runRule(rule: Equation => Option[(List[Equation], SetSubstitution, Bimap[Int,Int])])(eqs: List[Equation]): Option[(List[Equation], SetSubstitution, Bimap[Int,Int])] = {
     // Procedure:
     //   - Run the `rule` on all the (pending) equations in `iterationWorkList`, building
     //     `overallSubst` and producing `iterationOutput`.
@@ -196,7 +199,7 @@ object SetUnification {
     // The running substitution - applied to `iterationWorkList` equations lazily.
     var overallSubst = SetSubstitution.empty
     var overallProgress = false
-
+    var overallSemis: Bimap[Int,Int] = Bimap.empty
     // The mutable state of the iteration.
     var iterationWorkList = eqs
     var iterationOutput: List[Equation] = Nil
@@ -212,14 +215,14 @@ object SetUnification {
         val appliedRule = if (eq.isPending) rule(eq) else None
 
         appliedRule match {
-          case Some((outputEqs, outputSubst)) =>
+          case Some((outputEqs, outputSubst, outputSemis)) =>
             // We made progress - signal that and update state.
             iterationProgress = true
             overallProgress = true
 
             iterationOutput = outputEqs ++ iterationOutput
             overallSubst = outputSubst @@ overallSubst
-
+            overallSemis = overallSemis ++ outputSemis
           case None =>
             // No progress, just add to the output.
             iterationOutput = eq :: iterationOutput
@@ -234,7 +237,7 @@ object SetUnification {
     if (overallProgress) {
       // We apply `overallSubst` lazily, not all equations have seen all substitution information.
       val resultEqs = iterationWorkList.map(overallSubst.apply)
-      Some((resultEqs, overallSubst))
+      Some((resultEqs, overallSubst, overallSemis))
     } else {
       None
     }
@@ -255,11 +258,11 @@ object SetUnification {
     *   - `x1 ~ x1` becomes `({}, [])`
     *   - `x2 ~ univ` becomes `({x2 ~ univ}, [])`
     */
-  private def trivial(eq: Equation): Option[(List[Equation], SetSubstitution)] = {
+  private def trivial(eq: Equation): Option[(List[Equation], SetSubstitution, Bimap[Int,Int])] = {
     val Equation(f1, f2, _, _) = eq
 
-    val success = Some((Nil, SetSubstitution.empty))
-    val failure = Some((List(eq.toUnsolvable), SetSubstitution.empty))
+    val success = Some((Nil, SetSubstitution.empty, (Bimap.empty : Bimap[Int, Int])))
+    val failure = Some((List(eq.toUnsolvable), SetSubstitution.empty, (Bimap.empty : Bimap[Int, Int])))
 
     (f1, f2) match {
       // Equations that are trivial.
@@ -275,7 +278,7 @@ object SetUnification {
       case (Cst(_), Empty) => failure
       case (ElemSet(_), Empty) => failure
       case (Empty, ElemSet(_)) => failure
-
+      case (Semi(_, x1), Semi(_, x2)) if x1 == x2 => success
       // Equations that are neither trivial nor in obvious conflict.
       case _ => None // Cannot do anything.
     }
@@ -293,7 +296,7 @@ object SetUnification {
     *
     * This also applies to the symmetric equations.
     */
-  private def constantPropagation(eq: Equation): Option[(List[Equation], SetSubstitution)] = {
+  private def constantPropagation(eq: Equation): Option[(List[Equation], SetSubstitution, Bimap[Int, Int])] = {
     val Equation(f1, f2, _, loc) = eq
     (f1, f2) match {
       // x ~ f, where f is ground
@@ -301,11 +304,11 @@ object SetUnification {
       // {},
       // [x -> f]
       case (Var(x), f) if f.isGround =>
-        Some((Nil, SetSubstitution.singleton(x, f)))
+        Some((Nil, SetSubstitution.singleton(x, f), Bimap.empty))
 
       // Symmetric case.
       case (f, Var(x)) if f.isGround =>
-        Some((Nil, SetSubstitution.singleton(x, f)))
+        Some((Nil, SetSubstitution.singleton(x, f), Bimap.empty))
 
       // f1 ∪ f2 ∪ .. ~ empty
       // ---
@@ -313,12 +316,12 @@ object SetUnification {
       // []
       case (Union(l), Empty) =>
         val eqs = l.toList.map(Equation.mk(_, Empty, loc))
-        Some((eqs, SetSubstitution.empty))
+        Some((eqs, SetSubstitution.empty, Bimap.empty))
 
       // Symmetric Case.
       case (Empty, Union(l)) =>
         val eqs = l.toList.map(Equation.mk(_, Empty, loc))
-        Some((eqs, SetSubstitution.empty))
+        Some((eqs, SetSubstitution.empty, Bimap.empty))
 
       case _ =>
         // Cannot do anything.
@@ -338,7 +341,7 @@ object SetUnification {
     *
     * There is a binding-bias towards lower variables, such that `x1 ~ x2` and `x2 ~ x1` both become `({}, [x1 -> x2])`.
     */
-  private def variablePropagation(eq: Equation): Option[(List[Equation], SetSubstitution)] = {
+  private def variablePropagation(eq: Equation): Option[(List[Equation], SetSubstitution, Bimap[Int,Int])] = {
     val Equation(f1, f2, _, _) = eq
     (f1, f2) match {
       // x1 ~ x1
@@ -346,7 +349,7 @@ object SetUnification {
       // {},
       // []
       case (Var(x), Var(y)) if x == y =>
-        Some((Nil, SetSubstitution.empty))
+        Some((Nil, SetSubstitution.empty, Bimap.empty))
 
       // x1 ~ x2
       // ---
@@ -354,7 +357,7 @@ object SetUnification {
       // [x1 -> x2]
       case (x0@Var(_), y0@Var(_)) =>
         val (x, y) = if (x0.x > y0.x) (y0, x0) else (x0, y0)
-        Some((Nil, SetSubstitution.singleton(x.x, y)))
+        Some((Nil, SetSubstitution.singleton(x.x, y), Bimap.empty))
 
       case _ =>
         // Cannot do anything.
@@ -371,7 +374,7 @@ object SetUnification {
     *
     * This also applies to the symmetric equations.
     */
-  private def variableAssignment(eq: Equation): Option[(List[Equation], SetSubstitution)] = {
+  private def variableAssignment(eq: Equation): Option[(List[Equation], SetSubstitution, Bimap[Int,Int])] = {
     val Equation(f1, f2, _, _) = eq
     (f1, f2) match {
       // x ~ f, where f does not contain x
@@ -379,17 +382,41 @@ object SetUnification {
       // {},
       // [x -> f]
       case (v@Var(x), f) if !f.contains(v) =>
-        Some((Nil, SetSubstitution.singleton(x, f)))
+        Some((Nil, SetSubstitution.singleton(x, f), Bimap.empty))
 
       // Symmetric case.
       case (f, v@Var(x)) if !f.contains(v) =>
-        Some((Nil, SetSubstitution.singleton(x, f)))
+        Some((Nil, SetSubstitution.singleton(x, f), Bimap.empty))
 
       case _ =>
         // Cannot do anything.
         None
     }
   }
+
+  /**
+    * Solves semivariable equations (e.g. `Print[x] ~ Print[Int]` where `x` and `y` are types and `Print` has kind `Type -> Effect`).
+    *
+    * If no progress can be made, [[None]] is returned.
+    *
+    *   - `x ~ y` where `x` and `y` are semivariables becomes `({}, [x -> y])`
+    *   - `y ~ x` where `x` and `y` are semivariables becomes `({}, [y -> x])`
+    */
+  private def semivariableReduce(eq: Equation): Option[(List[Equation], SetSubstitution, Bimap[Int,Int])] = {
+    val Equation(f1, f2, _, _) = eq
+    (f1, f2) match {
+      // x ~ f, where f does not contain x
+      // ---
+      // {},
+      // [x -> f]
+      case (Semi(_, x), Semi(_, y)) => if (x > y) {
+        return Some((Nil, SetSubstitution.empty, Bimap.empty + (x, y)))
+      } else {
+        return Some((Nil, SetSubstitution.empty, Bimap.empty + (y, x)))
+      }
+      case _ => return None
+    }
+    }
 
   /**
     * Attempts to solve all the given equations `eqs` using the SVE algorithm.

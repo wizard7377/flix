@@ -25,7 +25,7 @@ import ca.uwaterloo.flix.language.phase.unification.set.Equation.Status
 import ca.uwaterloo.flix.language.phase.unification.set.{Equation, SetFormula, SetSubstitution, SetUnification}
 import ca.uwaterloo.flix.language.phase.unification.shared.CofiniteIntSet
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.{Zhegalkin, ZhegalkinAlgebra}
-import ca.uwaterloo.flix.util.collection.SortedBimap
+import ca.uwaterloo.flix.util.collection.{Bimap, SortedBimap}
 import ca.uwaterloo.flix.util.{ChaosMonkey, InternalCompilerException, Result}
 
 import scala.annotation.tailrec
@@ -42,6 +42,8 @@ object EffUnification3 {
     * Controls whether to enable solve-and-retry for subeffecting.
     */
   var EnableSmartSubeffecting: Boolean = true
+
+  val EnablePolyEffects : Boolean = true
 
   /**
     * Computes an MGU for **ALL* equations in `eqns0`.
@@ -80,10 +82,10 @@ object EffUnification3 {
     if (EnableSmartSubeffecting) {
       try {
         val equations = toEquations(eqs, withSlack = false)
-        val (unsolvedEqns, resultSubst) = SetUnification.solve(equations)
+        val (unsolvedEqns, resultSubst, semis) = SetUnification.solve(equations)
         if (unsolvedEqns.isEmpty) {
           // We have found a valid solution without subeffecting. Return it immediately.
-          return Result.Ok(fromSetSubst(resultSubst)(withSlack = false, m = bimap))
+          Result.Ok(Context(fromSetSubst(resultSubst)(withSlack = false, m = bimap), Bimap.empty))
         }
         // Otherwise we fall through.
       } catch {
@@ -97,9 +99,9 @@ object EffUnification3 {
     try {
       val equations = toEquations(eqs, withSlack = true)
       flix.emitEvent(FlixEvent.SolveEffEquations(equations))
-      val (unsolvedEqns, resultSubst) = SetUnification.solve(equations)
+      val (unsolvedEqns, resultSubst, semis) = SetUnification.solve(equations)
       if (unsolvedEqns.isEmpty) {
-        Result.Ok(fromSetSubst(resultSubst)(withSlack = true, m = bimap))
+        Result.Ok((fromSetSubst(resultSubst)(withSlack = true, m = bimap)))
       } else {
         Result.Err(fromSetEquations(unsolvedEqns))
       }
@@ -201,6 +203,23 @@ object EffUnification3 {
       val f1 = toSetFormula(tpe1)
       val f2 = toSetFormula(tpe2)
       SetFormula.mkXor2(f1, f2)
+    case tpe@Type.Apply(_,_,_) =>
+      val atom = Atom.fromType(tpe)
+      m.getForward(atom) match {
+        case None => throw InternalCompilerException(s"Unexpected unbound type application: '$tpe'.", tpe.loc)
+        case Some(x) => atom match {
+          case Atom.VarFlex(sym) =>
+            if (sym.isSlack && !withSlack) {
+              // Special Case: We have a slack variable and we want to ignore it. Return the empty set.
+              SetFormula.Empty
+            } else {
+              // General Case: A flexible type variable is a real Set variable.
+              SetFormula.Var(x)
+            }
+          case Atom.VarRigid(_) => SetFormula.Cst(x) // A rigid variable is a constant.
+          case _ => throw InternalCompilerException(s"Unexpected atom representation ($atom) of variable ($tpe)", tpe.loc)
+        }
+      }
 
     case Type.Alias(_, _, tpe, _) => toSetFormula(tpe)
 
@@ -287,6 +306,11 @@ object EffUnification3 {
 
     case SetFormula.Xor(other) =>
       Type.mkSymmetricDiff(other.map(fromSetFormula(_, loc)), loc)
+    case SetFormula.Semi(_, args) => m.getBackward(args) match {
+      case Some(atom) => Atom.toType(atom, loc)
+      case None => throw InternalCompilerException(s"Unexpected unbound constant identifier '$args'", loc)
+    }
+
   }
 
   /**
@@ -314,6 +338,7 @@ object EffUnification3 {
           case Atom.Eff(_) => 3
           case Atom.Assoc(_, _) => 4
           case Atom.Error(_) => 5
+          case Atom.Semi(_, _) => 6
         }
 
         ordinal(this) - ordinal(that)
@@ -330,6 +355,7 @@ object EffUnification3 {
     /** Representing an effect constant. */
     case class Eff(sym: Symbol.EffSym) extends Atom
 
+    case class Semi(head: Type, arg: Type) extends Atom
     /** Represents an associated effect. */
     case class Assoc(sym: Symbol.AssocTypeSym, arg: Atom) extends Atom
 
@@ -349,6 +375,7 @@ object EffUnification3 {
       case assoc@Type.AssocType(_, _, _, _) => assocFromType(assoc)
       case Type.Cst(TypeConstructor.Error(id, _), _) => Atom.Error(id)
       case Type.Alias(_, _, tpe, _) => fromType(tpe)
+      case Type.Apply(head, arg, _) => Atom.Semi(head,arg)
       case _ => throw InvalidType(t)
     }
 
@@ -410,6 +437,8 @@ object EffUnification3 {
       case Atom.Assoc(sym, arg0) =>
         Type.AssocType(AssocTypeSymUse(sym, loc), toType(arg0, loc), Kind.Eff, loc)
       case Atom.Error(id) => Type.Cst(TypeConstructor.Error(id, Kind.Eff), loc)
+      case Atom.Semi(head, arg) =>
+        Type.Apply(head, arg, loc)
     }
   }
 

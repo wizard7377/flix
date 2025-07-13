@@ -47,6 +47,11 @@ case class Bimap[A, B](m1: Map[A, B], m2: Map[B, A]) {
     */
   def +(p: (A, B)): Bimap[A, B] = Bimap(m1 + (p._1 -> p._2), m2 + (p._2 -> p._1))
 
+  def ++(that : Bimap[A, B]): Bimap[A, B] = {
+    val newM1 = this.m1 ++ that.m1
+    val newM2 = this.m2 ++ that.m2
+    Bimap(newM1, newM2)
+  }
   /**
     * Optionally returns the value `a` is mapped to.
     */

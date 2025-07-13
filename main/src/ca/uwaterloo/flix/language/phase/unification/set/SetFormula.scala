@@ -49,6 +49,7 @@ sealed trait SetFormula {
     case Inter(l) => l.exists(f => f.contains(v))
     case Union(l) => l.exists(f => f.contains(v))
     case Xor(other) => other.exists(_.contains(v))
+    case _ => false
   }
 
   /** `true` if `this` contains no variables. */
@@ -62,6 +63,7 @@ sealed trait SetFormula {
     case Inter(l) => l.forall(_.isGround)
     case Union(l) => l.forall(_.isGround)
     case Xor(l) => l.forall(_.isGround)
+    case Semi(_, _) => false
   }
 
   /**
@@ -79,6 +81,7 @@ sealed trait SetFormula {
     case Xor(l) => l.foldLeft(SortedSet.empty[Int]) {
       case (acc, f) => acc ++ f.cstsOf
     }
+    case _ => SortedSet.empty
   }
 
   /**
@@ -96,6 +99,7 @@ sealed trait SetFormula {
     case Xor(other) => other.foldLeft(SortedSet.empty[Int]) {
       case (acc, f) => acc ++ f.varsOf
     }
+    case _ => SortedSet.empty
   }
 
   /**
@@ -113,6 +117,7 @@ sealed trait SetFormula {
     case Xor(other) => other.foldLeft(SortedSet.empty[Int]) {
       case (acc, f) => acc ++ f.cstsOf
     }
+    case _ => SortedSet.empty
   }
 
   /**
@@ -128,6 +133,7 @@ sealed trait SetFormula {
     case Inter(l) => l.length + l.toList.map(_.size).sum
     case Union(l) => l.length + l.toList.map(_.size).sum
     case Xor(l) => l.length + l.map(_.size).sum
+    case _ => 0
   }
 
   /** Returns a human-readable string of `this`. */
@@ -138,6 +144,7 @@ sealed trait SetFormula {
     case ElemSet(s) if s.sizeIs == 1 => s"e${s.head}"
     case ElemSet(s) => s"{${s.map(x => s"e$x").mkString(", ")}}"
     case Var(x) => s"x$x"
+    case Semi(head, args) => s"s$head[$args]"
     case Compl(f) => f match {
       case Univ | Empty | Cst(_) | ElemSet(_) | Var(_) | Compl(_) => s"!$f"
       case Inter(_) | Union(_) | Xor(_) => s"!($f)"
@@ -182,6 +189,10 @@ object SetFormula {
     */
   case class Var(x: Int) extends SetFormula
 
+  /**
+    * Semivariables
+    */
+  case class Semi(head: Int, args: Int) extends SetFormula
   /**
     * A concrete, non-empty set/union of elements (`e42` or `e42+43`).
     *
@@ -261,6 +272,7 @@ object SetFormula {
       Compl(union)
     case xor@Xor(_) =>
       Compl(xor)
+    case o => Compl(o)
   }
 
   /**
